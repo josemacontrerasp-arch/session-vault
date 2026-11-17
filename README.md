@@ -28,9 +28,13 @@ Answer `y` to add the marketplace, then pick a scope (user makes it load in ever
   - *Fork*: a session was forked from, or started by, another.
   - *Shared files*: two sessions edited the same file (dashed).
   - *Unlinked mention*: a session says another's title in plain text. Listed with a Link button, not drawn, as in Obsidian.
-- **A graph pane.** `/vault` opens it: the global graph grouped by project, a local graph around one session with a depth, filters for projects, shared files and orphans, and for the session in focus its links, backlinks and unlinked mentions. A node grows with its connections. In the desktop app it also sits as a small widget when a session starts (`/vault auto off` stops that).
+- **A pane with three things.** `/vault` opens it: the graph, a session picker, and one message box.
+  - *The graph* shows every session grouped by project; pick a session and it shows that session's neighbourhood. A node grows with its connections, and hovering one shows its name and lights up what it connects to.
+  - *The picker* lists your other sessions, the open ones first. Picking one shows what it is doing: whether it is working, idle or closed, your last prompt there and Claude's last reply. The pane re-indexes every 30 seconds while it is open.
+  - *The message box* sends what you type to the picked session. With no session picked, the message goes to the session you are in, whose Claude finds the right session in the vault and answers.
+  - In the desktop app the graph also sits as a small widget when a session starts (`/vault auto off` stops that).
 - **Asking about other sessions.** The model gets tools over the vault, `search`, `read`, `list` and `link` (and `send`, below), and is told to use them when you ask about another session. Typing `[[Session title]]` in a prompt points it at that session.
-- **Giving another session a task.** Ask for it in any session ("have the journal paper session update the abstract"), type it in the box under a focused session in the pane, or run `/vault send <session> :: <task>`. A session that is running gets it at once, as a message from the sending session. For one that is not running, the task waits in the vault's inbox and starts as a turn of its own when that session next starts with this mod loaded, marked as coming from the other session. Waiting tasks older than 30 days are dropped.
+- **Giving another session a task.** Ask for it in any session ("have the journal paper session update the abstract"), pick the session in the pane and type in the message box, or run `/vault send <session> :: <task>`. A session that is running gets it at once, as a message from the sending session. For one that is not running, the task waits in the vault's inbox and starts as a turn of its own when that session next starts with this mod loaded, marked as coming from the other session. Waiting tasks older than 30 days are dropped.
 
 ## Commands
 
@@ -51,7 +55,7 @@ Python 3.8 or later on the PATH (`python`, `py -3` or `python3`); standard libra
 
 ## Limits
 
-- A node in the drawing cannot be clicked: hover shows its name and lights its connections, and the picker under the graph is how you choose a session.
+- A node in the drawing cannot be clicked, and the pane cannot open another session in the app: hover shows a node's name, and the picker under the graph is how you choose a session.
 - The graph draws in the desktop app, VS Code and mobile; a terminal gets the lists.
 - A task reaches a session that is not running only once that session starts with this mod loaded, so the mod has to be installed for all sessions, not one.
 - The session that receives a task works with its own permissions; it reports back only if its Claude sends the report.

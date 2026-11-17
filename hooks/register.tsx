@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { VaultGraph, VaultNode, VaultStatus, VaultView } from '../types'
-import { drawGraph, matches } from './graph.js'
+import { drawGraph } from './graph.js'
 import type { Drawing } from './graph.js'
 
 // Every session is a note in one vault (scripts/vault.py builds it from the
@@ -12,7 +12,6 @@ import type { Drawing } from './graph.js'
 
 const PANE = 'session-vault'
 const TITLE = 'Session vault'
-const ROWS = 5
 
 const EMPTY: VaultGraph = {
   v: 1,
@@ -299,31 +298,44 @@ function brief(node: VaultNode): string {
 
 const drawings = new Map<string, Drawing>()
 
-function drawingOf(graph: VaultGraph, view: VaultView, self: string, compact: boolean): Drawing {
+// Whether the pane is open in full: while it is, the vault is re-indexed on a
+// timer, so what each session is doing stays current.
+let isPaneOpen = false
+
+type Frame = 'widget' | 'narrow' | 'wide'
+
+const FRAMES = {
+  widget: { width: 300, height: 200, pixelWidth: 900, compact: true },
+  narrow: { width: 420, height: 400, pixelWidth: 1260 },
+  wide: { width: 960, height: 520, pixelWidth: 1920, labelUpTo: 400 },
+} as const
+
+function drawingOf(graph: VaultGraph, view: VaultView, self: string, frame: Frame): Drawing {
   const shown = { ...view, page: 0 }
-  const key = `${graph.generatedAt}|${self}|${compact ? 1 : 0}|${JSON.stringify(shown)}`
+  const key = `${graph.generatedAt}|${self}|${frame}|${JSON.stringify(shown)}`
   const kept = drawings.get(key)
   if (kept) return kept
-  const made = compact
-    ? drawGraph(graph, shown, self, { width: 300, height: 200, pixelWidth: 900, compact: true })
-    : drawGraph(graph, shown, self, { width: 420, height: 400, pixelWidth: 1260 })
+  const made = drawGraph(graph, shown, self, FRAMES[frame])
   if (drawings.size > 16) drawings.clear()
   drawings.set(key, made)
   return made
 }
 
-const KIND_OUT: Record<string, string> = {
-  link: 'links to',
-  fork: 'forked from',
-  spawn: 'started by',
-  files: 'same files',
+/**
+ * A message typed in the pane with no session picked: this session's Claude
+ * finds the session it is about in the vault and answers here.
+ */
+async function askVault($: EngineInterface, message: string): Promise<void> {
+  await $.prompt.submit({
+    text: [
+      'The user typed this in the session vault pane without picking a session.',
+      `Find the session or sessions it is about with ${TOOL_SEARCH} and ${TOOL_READ}, answer from what they hold, and say which session you used. If it asks for something to be done in another session, hand it over with ${TOOL_SEND}.`,
+      '',
+      `The user's message: ${message}`,
+    ].join('\n'),
+  })
 }
-const KIND_IN: Record<string, string> = {
-  link: 'links here',
-  fork: 'fork of this',
-  spawn: 'started from this',
-  files: 'same files',
-}
+
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -423,6 +435,9 @@ export const register: Register = on => {
     void (async () => {
       await refresh($, 'session started')
     })()
+    $.clock.every(30_000, () => {
+      if (isPaneOpen) void refresh($, 'pane open')
+    })
     // A waiting task starts a turn of its own, so it is handed over by a
     // timer, once this hook has let the session start.
     if (e.isInteractive) {
@@ -602,6 +617,12 @@ export const register: Register = on => {
     return { text: `Session vault opened on "${node.title}".` }
   })
 
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE) isPaneOpen = false
+
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const table = $.ui.resolve(e)
     const { Box, Text, Button, Input, Select } = table
@@ -613,9 +634,6 @@ export const register: Register = on => {
 
     const reindex = () => {
       void refresh($, 'asked')
-    }
-    const change = (fn: (view: VaultView) => VaultView) => () => {
-      void update($, viewAtom, fn)
     }
 
     if (graph.nodes.length === 0) {
@@ -642,7 +660,8 @@ export const register: Register = on => {
     const head = `${graph.nodes.length} sessions · ${links} connections`
 
     if (e.props.placement === 'widget') {
-      const glance = Svg ? drawingOf(graph, { ...FIRST_VIEW }, self, true) : undefined
+      isPaneOpen = false
+      const glance = Svg ? drawingOf(graph, { ...FIRST_VIEW }, self, 'widget') : undefined
 
       return (
         <Box flexDirection="column">
@@ -651,244 +670,102 @@ export const register: Register = on => {
         </Box>
       )
     }
+    isPaneOpen = true
 
     const now = await $.clock.now()
     const byId = new Map(graph.nodes.map(node => [node.id, node]))
     const focus = byId.get(view.focus)
-    const drawing = Svg ? drawingOf(graph, view, self, false) : undefined
-    const state =
-      status.phase === 'indexing'
-        ? 'indexing…'
-        : status.phase === 'error'
-          ? status.message
-          : `indexed ${ago(graph.generatedAt, now)} ago`
+    const picked = focus && focus.id !== self ? focus : undefined
+    const isWide = e.props.bodyColumns >= 100
+    const shown: VaultView = picked
+      ? { ...FIRST_VIEW, focus: picked.id, mode: 'local', depth: 2 }
+      : { ...FIRST_VIEW }
+    const drawing = Svg ? drawingOf(graph, shown, self, isWide ? 'wide' : 'narrow') : undefined
 
-    const focusOn = (id: string) =>
-      change(old => ({ ...old, focus: id, mode: 'local', page: 0 }))
-    const mention = (node: VaultNode) => () => {
-      const name = node.title.replace(/[[\]|]/g, ' ').trim()
-      void $.prompt.fill({ text: `[[${name}]] `, mode: 'append' })
-    }
-    const connect = (from: string, to: string, isRemoving: boolean) => () => {
-      void linkSessions($, from, to, isRemoving)
-    }
-
-    const row = (node: VaultNode, key: string, lead: string, note: string) => (
-      <Button key={key} plain onPress={focusOn(node.id)}>
-        {lead}
-        {node.title}
-        <Text dimColor>{note === '' ? '' : `  ${note}`}</Text>
-      </Button>
-    )
-
-    const outgoing = focus ? graph.edges.filter(edge => edge.a === focus.id) : []
-    const incoming = focus ? graph.edges.filter(edge => edge.b === focus.id) : []
-    const mentionedIn = focus
-      ? graph.mentions.filter(pair => pair[1] === focus.id).map(pair => pair[0] ?? '')
-      : []
-    const mentionsOf = focus
-      ? graph.mentions.filter(pair => pair[0] === focus.id).map(pair => pair[1] ?? '')
-      : []
-    const isLinkedFromSelf =
-      focus !== undefined &&
-      graph.edges.some(edge => edge.a === self && edge.b === focus.id && edge.k === 'link')
-
-    const listed = graph.nodes.filter(node => matches(node, view.query))
+    const stateOf = (node: VaultNode) =>
+      node.live === true
+        ? node.lastRole === 'u' || now - node.updated < 90_000
+          ? 'working now'
+          : 'open, idle'
+        : 'closed'
+    const others = graph.nodes.filter(node => node.id !== self)
+    const ranked = [
+      ...others.filter(node => node.live === true),
+      ...others.filter(node => node.live !== true),
+    ]
     const options = [
-      {
-        value: '',
-        label:
-          view.query === ''
-            ? `Choose a session (${listed.length})`
-            : `${listed.length} match "${view.query}"`,
-      },
-      ...listed.slice(0, 150).map(node => ({
+      { value: '', label: 'No session picked: Claude finds it for you' },
+      ...ranked.slice(0, 150).map(node => ({
         value: node.id,
-        label: `${node.id === self ? '◉ ' : ''}${node.title.slice(0, 48)} — ${node.project}, ${ago(node.updated, now)}`,
+        label: `${node.live === true ? '● ' : ''}${node.title.slice(0, 50)} — ${node.project}, ${ago(node.updated, now)}`,
       })),
     ]
-    const picked = focus && options.some(option => option.value === focus.id) ? focus.id : ''
-    const isLocal = view.mode === 'local' && focus !== undefined
-    const rest = (count: number) =>
-      count > ROWS ? <Text dimColor>{`and ${count - ROWS} more`}</Text> : null
-    const hasNone =
-      outgoing.length + incoming.length + mentionedIn.length + mentionsOf.length === 0
+    const linkCount = picked
+      ? graph.edges.filter(edge => edge.a === picked.id || edge.b === picked.id).length
+      : 0
 
     return (
       <Box flexDirection="column" gap={1}>
-        <Text dimColor>
-          {isLocal ? `Around "${focus.title}", depth ${view.depth} · ${state}` : `${head} · ${state}`}
-        </Text>
-
-        {Svg && drawing && <Svg source={drawing.source} alt={drawing.alt} isInteractive />}
-        {Svg && (
-          <Text dimColor>● session  ○ project  → link  ┄ same files · hover a dot for its name</Text>
+        {Svg && drawing && (
+          <Svg
+            source={drawing.source}
+            alt={drawing.alt}
+            height={isWide ? 520 : 400}
+            isInteractive
+          />
         )}
-        {!Svg && <Text dimColor>The graph draws in the desktop app; the rest works here.</Text>}
-
-        <Box flexDirection="row" flexWrap="wrap" gap={1}>
-          <Button
-            key="mode-global"
-            variant={isLocal ? 'secondary' : 'primary'}
-            onPress={change(old => ({ ...old, mode: 'global' }))}
-          >
-            All
-          </Button>
-          <Button
-            key="mode-local"
-            variant={isLocal ? 'primary' : 'secondary'}
-            onPress={change(old => ({
-              ...old,
-              mode: 'local',
-              focus: old.focus !== '' ? old.focus : self,
-            }))}
-          >
-            Around one
-          </Button>
-          {isLocal && (
-            <Button
-              key="depth"
-              onPress={change(old => ({ ...old, depth: old.depth >= 3 ? 1 : old.depth + 1 }))}
-            >
-              {`Depth ${view.depth}`}
-            </Button>
-          )}
-          <Button key="tags" onPress={change(old => ({ ...old, showTags: !old.showTags }))}>
-            {view.showTags ? 'Projects ✓' : 'Projects'}
-          </Button>
-          <Button key="files" onPress={change(old => ({ ...old, showFiles: !old.showFiles }))}>
-            {view.showFiles ? 'Shared files ✓' : 'Shared files'}
-          </Button>
-          <Button key="reindex" onPress={reindex}>
-            Refresh
-          </Button>
-        </Box>
+        {status.phase === 'error' && <Text dimColor>{status.message}</Text>}
 
         <Select
           key="pick"
           options={options}
-          value={picked}
+          value={picked ? picked.id : ''}
           onSelect={id => {
-            void update($, viewAtom, old =>
-              id === ''
-                ? { ...old, focus: '', mode: 'global' as const }
-                : { ...old, focus: id, mode: 'local' as const },
-            )
-          }}
-        />
-        <Input
-          key="filter"
-          placeholder="Filter by title, project or prompt"
-          value={view.query}
-          submitLabel="filter"
-          onSubmit={value => {
-            void update($, viewAtom, old => ({ ...old, query: value.trim(), page: 0 }))
+            void update($, viewAtom, old => ({ ...old, focus: id }))
           }}
         />
 
-        {focus && (
-          <Box flexDirection="column" borderStyle="round" paddingX={1} gap={1}>
-            <Box flexDirection="column">
-              <Text weight="semibold">{focus.title}</Text>
-              <Text dimColor>
-                {`${focus.project} · ${focus.prompts} prompts · ${ago(focus.updated, now)} ago · ${focus.id === self ? 'this session' : focus.live === true ? 'running now' : 'not running'}`}
+        {picked && (
+          <Box flexDirection="column" borderStyle="round" paddingX={1}>
+            <Text weight="semibold">{picked.title}</Text>
+            <Text dimColor>
+              {`${stateOf(picked)} · ${picked.project} · active ${ago(picked.updated, now)} ago · ${linkCount} connection${linkCount === 1 ? '' : 's'}`}
+            </Text>
+            {picked.last !== '' && (
+              <Text>
+                <Text dimColor>You: </Text>
+                {picked.last}
               </Text>
-            </Box>
-            {focus.first !== '' && (
-              <Text>{focus.first.length > 150 ? `${focus.first.slice(0, 150)}…` : focus.first}</Text>
             )}
-
-            {focus.id !== self && (
-              <Box flexDirection="row" flexWrap="wrap" gap={1}>
-                <Button key="mention" variant="primary" onPress={mention(focus)}>
-                  Ask about it
-                </Button>
-                {self !== '' && (
-                  <Button key="connect" onPress={connect(self, focus.id, isLinkedFromSelf)}>
-                    {isLinkedFromSelf ? 'Unlink' : 'Link to this session'}
-                  </Button>
-                )}
-              </Box>
-            )}
-            {focus.id !== self && (
-              <Input
-                key="task"
-                placeholder={
-                  focus.live === true
-                    ? 'Give it a task: it gets it now'
-                    : 'Give it a task: it gets it when it next starts'
-                }
-                submitLabel="send"
-                onSubmit={value => {
-                  void (async () => {
-                    $.ui.toast(await sendTask($, focus.id, value))
-                  })()
-                }}
-              />
-            )}
-
-            {hasNone && (
-              <Text dimColor>No connections yet. Name it as [[its title]] in a prompt to link it.</Text>
-            )}
-            {outgoing.length > 0 && (
-              <Box flexDirection="column">
-                <Text dimColor>{`Links (${outgoing.length})`}</Text>
-                {outgoing.slice(0, ROWS).map(edge => {
-                  const other = byId.get(edge.b)
-
-                  return other
-                    ? row(other, `out:${edge.k}:${other.id}`, '→ ', KIND_OUT[edge.k] ?? '')
-                    : null
-                })}
-                {rest(outgoing.length)}
-              </Box>
-            )}
-            {incoming.length > 0 && (
-              <Box flexDirection="column">
-                <Text dimColor>{`Backlinks (${incoming.length})`}</Text>
-                {incoming.slice(0, ROWS).map(edge => {
-                  const other = byId.get(edge.a)
-
-                  return other
-                    ? row(other, `in:${edge.k}:${other.id}`, '← ', KIND_IN[edge.k] ?? '')
-                    : null
-                })}
-                {rest(incoming.length)}
-              </Box>
-            )}
-            {mentionedIn.length + mentionsOf.length > 0 && (
-              <Box flexDirection="column">
-                <Text dimColor>
-                  {`Unlinked mentions (${mentionedIn.length + mentionsOf.length})`}
-                </Text>
-                {mentionedIn.slice(0, ROWS).map(id => {
-                  const other = byId.get(id)
-
-                  return other ? (
-                    <Box key={`mi:${id}`} flexDirection="row" gap={1}>
-                      {row(other, `min:${id}`, '', 'names this one')}
-                      <Button key={`mil:${id}`} onPress={connect(id, focus.id, false)}>
-                        Link
-                      </Button>
-                    </Box>
-                  ) : null
-                })}
-                {mentionsOf.slice(0, ROWS).map(id => {
-                  const other = byId.get(id)
-
-                  return other ? (
-                    <Box key={`mo:${id}`} flexDirection="row" gap={1}>
-                      {row(other, `mof:${id}`, '', 'is named here')}
-                      <Button key={`mol:${id}`} onPress={connect(focus.id, id, false)}>
-                        Link
-                      </Button>
-                    </Box>
-                  ) : null
-                })}
-              </Box>
+            {(picked.reply ?? '') !== '' && (
+              <Text>
+                <Text dimColor>Claude: </Text>
+                {picked.reply}
+              </Text>
             )}
           </Box>
         )}
+
+        <Input
+          key="message"
+          label={picked ? 'To this session' : 'To the vault'}
+          placeholder={picked ? 'Tell it what to do' : 'Ask about any session'}
+          rows={2}
+          submitLabel="send"
+          onSubmit={value => {
+            const message = value.trim()
+            if (message === '') return
+            void (async () => {
+              if (picked) $.ui.toast(await sendTask($, picked.id, message))
+              else await askVault($, message)
+            })()
+          }}
+        />
+        <Text dimColor>
+          {picked
+            ? `${head} · it gets your message ${picked.live === true ? 'now' : 'when it next opens'}`
+            : `${head} · pick a session to talk to it directly`}
+        </Text>
       </Box>
     )
   })

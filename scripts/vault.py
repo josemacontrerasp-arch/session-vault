@@ -37,7 +37,7 @@ from pathlib import Path
 
 CACHE_VERSION = 3
 MAX_MESSAGE_CHARS = 6000
-STALE_LOCK_SECONDS = 15 * 60
+STALE_LOCK_SECONDS = 120
 
 HOME = Path.home()
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME / ".claude")
@@ -495,6 +495,8 @@ def join_records(node_id, records):
         "prompts": len(prompts),
         "first": prompts[0]["x"] if prompts else "",
         "last": prompts[-1]["x"] if prompts else "",
+        "reply": next((turn["x"] for turn in reversed(turns) if turn["r"] == "a"), ""),
+        "lastRole": turns[-1]["r"] if turns else "",
         "files": files,
         "reads": reads,
         "parentRefs": [(parent, "fork") for parent in parents],
@@ -823,6 +825,8 @@ def command_index(args):
                     "prompts": node["prompts"],
                     "first": one_line(node["first"], 220),
                     "last": one_line(node["last"], 220),
+                    "reply": one_line(node["reply"], 420),
+                    "lastRole": node["lastRole"],
                     "note": note_name(node),
                     "cli": node["cli"],
                     "archived": node["archived"],

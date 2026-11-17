@@ -122,23 +122,42 @@ test('the pane lists every session, on every surface', async ($, on) => {
   }
 })
 
-test('picking a session shows its links, backlinks and unlinked mentions', async ($, on) => {
+test('picking a session shows what it is doing and sends it what is typed', async ($, on) => {
   const runs: string[][] = []
-  world(on, runs)
+  const stdin: string[] = []
+  world(on, runs, { stdin })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await $.command.run({ command: 'vault', args: 'reindex' })
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.select({ key: 'pick', value: DESIGN })
 
-  expect(await ui.find({ type: 'Text', text: /Backlinks \(1\)/ })).toBeDefined()
-  expect(await ui.find({ key: `in:link:${DRYER}` })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Unlinked mentions \(1\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Heat exchanger design$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /closed · PLANT/ })).toBeDefined()
 
-  // The unlinked mention's Link button links the session that names this one.
-  await ui.press({ key: `mil:${NOTES}` })
-  const linked = runs.find(args => args[0] === 'link')
-  expect(linked).toEqual(['link', `--source=${NOTES}`, `--to=${DESIGN}`, '--note='])
+  await ui.input({ key: 'message', text: 'recompute the duty' })
+  expect(JSON.parse(stdin[0] ?? '{}')).toMatchObject({ to: DESIGN, text: 'recompute the duty' })
+  await ui.unmount()
+})
+
+test('with no session picked, the message asks this session to search the vault', async ($, on) => {
+  const runs: string[][] = []
+  world(on, runs)
+  const prompts: string[] = []
+  on('prompt.submit', (_, e) => {
+    prompts.push(e.text)
+
+    return { text: e.text }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'vault', args: 'reindex' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.input({ key: 'message', text: 'where did I size the dryer?' })
+
+  expect(prompts.some(text => text.includes("The user's message: where did I size the dryer?"))).toBe(true)
+  expect(prompts.some(text => text.includes('mcp__session-vault__search'))).toBe(true)
+  expect(runs.some(args => args[0] === 'queue')).toBe(false)
   await ui.unmount()
 })
 

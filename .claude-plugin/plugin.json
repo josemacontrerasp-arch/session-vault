@@ -1,6 +1,6 @@
 {
   "name": "session-vault",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Every Claude session is a note in one vault, connected Obsidian-style: a graph pane of links, backlinks, forks and shared files, tools that let any session search and read the others, and tasks handed from one session to another. /vault opens it.",
   "author": { "name": "josemacontrerasp-arch" },
   "license": "MIT",

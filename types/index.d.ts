@@ -13,6 +13,8 @@ export type VaultNode = {
   cli: string[]
   archived: boolean
   live?: boolean
+  reply?: string
+  lastRole?: string
 }
 
 export type VaultEdge = {

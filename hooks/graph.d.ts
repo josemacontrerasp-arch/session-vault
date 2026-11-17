@@ -48,6 +48,7 @@ export function drawGraph(
     width?: number
     height?: number
     pixelWidth?: number
+    labelUpTo?: number
     compact?: boolean
     limit?: number
   },

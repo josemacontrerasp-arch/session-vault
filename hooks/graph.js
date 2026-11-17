@@ -141,6 +141,14 @@ export function buildScene(graph, view, self, limit = 160) {
     degree.set(edge.b, (degree.get(edge.b) ?? 0) + 1)
   }
 
+  // A side chat: a session whose one connection is the session it was forked
+  // from. Its label waits for the pointer, so a busy parent stays readable.
+  const side = new Set(
+    edges
+      .filter(edge => (edge.k === 'fork' || edge.k === 'spawn') && degree.get(edge.a) === 1)
+      .map(edge => edge.a),
+  )
+
   const nodes = sessions.map(node => ({
     id: node.id,
     kind: 'session',
@@ -151,6 +159,7 @@ export function buildScene(graph, view, self, limit = 160) {
     r: Math.min(13, 4 + 1.9 * Math.sqrt(degree.get(node.id) ?? 0)),
     isSelf: node.id === self,
     isFocus: node.id === focus,
+    isSide: side.has(node.id),
   }))
 
   const members = new Map()
@@ -373,7 +382,7 @@ function draw(scene, at, width, height, options) {
       parts.push(`<circle r="${round(node.r)}" fill="${node.color}"/>`)
     }
     const isNamedTag = node.kind === 'tag' && (!options.compact || node.count >= 4)
-    const always = labelAll || isNamedTag || node.isSelf || node.isFocus
+    const always = (labelAll && node.isSide !== true) || isNamedTag || node.isSelf || node.isFocus
     if (always || options.hover) {
       const text = node.kind === 'tag' ? shorten(node.title, 18) : shorten(node.title, options.compact ? 16 : 22)
       const weight = node.kind === 'tag' || node.isSelf || node.isFocus ? ' font-weight="600"' : ''
@@ -412,7 +421,7 @@ export function drawGraph(graph, view, self, options = {}) {
       const source = draw(scene, at, width, height, {
         hover,
         compact,
-        labelUpTo: compact ? 0 : 24,
+        labelUpTo: compact ? 0 : (options.labelUpTo ?? 24),
         pixelWidth: options.pixelWidth,
       })
       if (source.length <= MAX_SVG) return { source, alt, sessions, links, scene }
