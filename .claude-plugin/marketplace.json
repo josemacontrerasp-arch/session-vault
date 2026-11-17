@@ -1,0 +1,11 @@
+{
+  "name": "session-vault",
+  "owner": { "name": "josemacontrerasp-arch" },
+  "plugins": [
+    {
+      "name": "session-vault",
+      "source": "./",
+      "description": "Every Claude session is a note in one vault, connected Obsidian-style: a graph pane, tools to search and read other sessions, and tasks handed from one session to another. /vault opens it."
+    }
+  ]
+}
